@@ -4,11 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"image"
-)
-
-var (
-	ErrNotSupportJsonType = errors.New("not support json type")
-	ErrNotSupportFileType = errors.New("not support file type")
+	"path/filepath"
 )
 
 type JsonSize struct {
@@ -58,16 +54,9 @@ func dumpJson(c *DumpContext) error {
 		return err
 	}
 
-	if version.Meta == nil {
-		return ErrNotSupportJsonType
-	}
-
 	if version.Meta.Version != "1.0" {
 		return errors.New("unknow version:[" + version.Meta.Version + "]")
 	}
-
-	part := c.AppendPart()
-	part.ImageFile = version.Meta.Image
 
 	frames := map[string]*JsonFrameV1{}
 
@@ -95,13 +84,15 @@ func dumpJson(c *DumpContext) error {
 	for k, v := range frames {
 		f := v.Frame
 		s := v.SourceSize
-		part.Frames[k] = &Frame{
+		c.Frames[k] = Frame{
 			Rect:         image.Rect(f.X, f.Y, f.X+f.W, f.Y+f.H),
 			OriginalSize: image.Point{s.W, s.H},
-			Rotated:      ifelse(v.Rotated, 90, 0),
+			Rotated:      v.Rotated,
 			Offset:       image.Point{-v.SpriteSourceSize.X / 2, -v.SpriteSourceSize.Y / 2}, //plist offset in center, json in left-top
 		}
 	}
+
+	c.ImageFile = filepath.Join(filepath.Dir(c.FileName), version.Meta.Image)
 
 	return nil
 }

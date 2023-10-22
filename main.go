@@ -4,29 +4,18 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 
-	"github.com/alexflint/go-arg"
 	"github.com/disintegration/imaging"
 )
-
-func ifelse(c bool, a, b int) int {
-	if c {
-		return a
-	} else {
-		return b
-	}
-}
 
 type Frame struct {
 	Rect         image.Rectangle
 	Offset       image.Point
 	OriginalSize image.Point
-	Rotated      int
+	Rotated      bool
 }
 
 func LoadImage(path string) (img image.Image, err error) {
@@ -87,42 +76,28 @@ func GetFiles(dir string, allow []string) []string {
 	return ret
 }
 
-type AtlasPart struct {
-	ImageFile string
-	Frames    map[string]*Frame
-}
-
 type DumpContext struct {
 	FileName    string
 	FileContent []byte
-	Atlases     []*AtlasPart
+	Frames      map[string]Frame
+	ImageFile   string
 }
 
-func (dc *DumpContext) AppendPart() *AtlasPart {
-	part := &AtlasPart{}
-	part.Frames = map[string]*Frame{}
-	dc.Atlases = append(dc.Atlases, part)
-	return part
-}
-
-func (dc *DumpContext) dumpFrames(part *AtlasPart) error {
-	textureFileName := filepath.Join(filepath.Dir(dc.FileName), part.ImageFile)
-
+func dumpFrames(frames map[string]Frame, textureFileName, outdir string) error {
 	textureImage, err := LoadImage(textureFileName)
 	if err != nil {
 		return fmt.Errorf("open image error:" + textureFileName)
 	}
 
-	outdir := filepath.Join(dc.FileName + ".out")
 	if !IsDir(outdir) {
-		err = os.MkdirAll(outdir, os.ModePerm)
+		err = os.Mkdir(outdir, os.ModePerm)
 		if err != nil {
 			return err
 		}
 	}
 
-	for k, v := range part.Frames {
-		// fmt.Println(k)
+	for k, v := range frames {
+		fmt.Println(k)
 
 		var subImage image.Image
 
@@ -131,12 +106,9 @@ func (dc *DumpContext) dumpFrames(part *AtlasPart) error {
 		ow, oh := v.OriginalSize.X, v.OriginalSize.Y
 		x, y := v.Rect.Min.X, v.Rect.Min.Y
 
-		if v.Rotated == 90 {
+		if v.Rotated {
 			subImage = imaging.Crop(textureImage, image.Rect(x, y, x+h, y+w))
 			subImage = imaging.Rotate90(subImage)
-		} else if v.Rotated == 270 {
-			subImage = imaging.Crop(textureImage, image.Rect(x, y, x+h, y+w))
-			subImage = imaging.Rotate270(subImage)
 		} else {
 			subImage = imaging.Crop(textureImage, image.Rect(x, y, x+w, y+h))
 		}
@@ -144,25 +116,20 @@ func (dc *DumpContext) dumpFrames(part *AtlasPart) error {
 		destImage := image.NewRGBA(image.Rect(0, 0, ow, oh))
 		newImage := imaging.Paste(destImage, subImage, image.Point{(ow-w)/2 + ox, (oh-h)/2 - oy})
 
-		savepath := path.Join(outdir, k)
-		if path.Ext(savepath) == "" {
-			savepath += ".png"
-		}
-
-		SaveImage(savepath, newImage)
+		SaveImage(path.Join(outdir, k), newImage)
 	}
 
 	return nil
 }
 
-func dumpByFileName(filename string) error {
+func dumpByFileName(filename string) {
 
 	c := DumpContext{
 		FileName: filename,
-		Atlases:  []*AtlasPart{},
+		Frames:   map[string]Frame{},
 	}
 
-	data, _ := ioutil.ReadFile(c.FileName)
+	data, _ := os.ReadFile(c.FileName)
 	c.FileContent = data
 
 	var err error
@@ -175,80 +142,43 @@ func dumpByFileName(filename string) error {
 		err = dumpJson(&c)
 	case ".fnt":
 		err = dumpFnt(&c)
-	case ".atlas":
-		err = dumpSpine(&c)
 	default:
-		err = ErrNotSupportFileType
+		return
 	}
 
 	if err != nil {
-		return err
+		panic(err)
 	}
 
-	for _, part := range c.Atlases {
-		err = c.dumpFrames(part)
-		if err != nil {
-			return err
-		}
+	err = dumpFrames(c.Frames, c.ImageFile, c.FileName+".dir")
+	if err != nil {
+		panic(err)
 	}
-
-	return nil
 }
 
-func main() {
-	var args struct {
-		Input string `arg:"positional"`
-		Ext   string `arg:"-e,--ext" help:"dump ext json,plist,fnt,atlas "`
-	}
-
-	arg.MustParse(&args)
-
-	var ext []string
-
-	if args.Ext == "" {
-		ext = []string{".json", ".plist", ".fnt", ".atlas"}
-	} else {
-		ext = []string{}
-		arr := strings.Split(args.Ext, ",")
-		for _, v := range arr {
-			ext = append(ext, "."+v)
-		}
-	}
-
-	if args.Input == "" {
-		args.Input = "./"
-	}
-
-	// fmt.Println(ext)
-
+func doDump(path string) {
 	allfiles := []string{}
-	if IsDir(args.Input) {
-		files := GetFiles(args.Input, ext)
+
+	if IsDir(path) {
+		files := GetFiles(path, []string{".json", ".plist", ".fnt"})
 		allfiles = append(allfiles, files...)
-	} else {
-		allfiles = append(allfiles, args.Input)
 	}
 
 	fmt.Println(fmt.Sprintf("开始导出：共（%d）个", len(allfiles)))
 	for i, v := range allfiles {
-		err := dumpByFileName(v)
+		fmt.Println(fmt.Sprintf("导出 %d/%d %s", i+1, len(allfiles), v))
+		dumpByFileName(v)
+	}
+}
 
-		p := fmt.Sprintf("%d/%d", i+1, len(allfiles))
+func main() {
 
-		if err != nil {
-			if err == ErrNotSupportFileType {
-
-			} else if err == ErrNotSupportJsonType {
-				fmt.Println("跳过", p, v)
-			} else {
-				fmt.Println("错误", p, v, err)
-			}
-		} else {
-			fmt.Println("导出", p, v)
-		}
+	if len(os.Args) == 1 {
+		doDump("./")
+	} else {
+		doDump(os.Args[1])
 	}
 
 	fmt.Printf("\n")
-	fmt.Printf("好用请给个Star，谢谢.\n")
-	fmt.Printf("https://github.com/qcdong2016/PlistDumper.git\n")
+	fmt.Printf("完成\n")
 }
